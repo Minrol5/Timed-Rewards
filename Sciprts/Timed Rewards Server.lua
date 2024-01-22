@@ -1,160 +1,156 @@
 local AIO = AIO or require("AIO")
 
+-- Table to store reward data during server startup
+local rewardData = {
+    Daily = {},
+    Weekly = {},
+}
+
+-- Table to store player timestamps in memory
+local playerTimestamps = {}
+
+-- Function to load reward data from the database during server startup
+local function LoadRewardData()
+    local query = WorldDBQuery("SELECT Type, Item1, Amount1, Item2, Amount2, Item3, Amount3, Item4, Amount4 FROM timed_rewards")
+
+    if query then
+        repeat
+            local rewardType = query:GetString(0)
+            local reward = {
+                item1 = query:GetUInt32(1),
+                amount1 = query:GetUInt32(2),
+                item2 = query:GetUInt32(3),
+                amount2 = query:GetUInt32(4),
+                item3 = query:GetUInt32(5),
+                amount3 = query:GetUInt32(6),
+                item4 = query:GetUInt32(7),
+                amount4 = query:GetUInt32(8),
+            }
+
+            if not rewardData[rewardType] then
+                rewardData[rewardType] = {}
+            end
+
+            table.insert(rewardData[rewardType], reward)
+        until not query:NextRow()
+    end
+end
+
+-- Call the function to load reward data during server startup
+LoadRewardData()
+
 local MyHandlers = AIO.AddHandlers("Rewards", {})
 
-local function CheckAndCreateTimedTimesEntry(player, rewardType)
+-- Function to check and create a player entry in memory
+local function CheckAndCreatePlayerEntry(player)
     local playerGuid = player:GetGUIDLow()
 
-    -- Checks if the player has an DB entry
-    local existingEntry = WorldDBQuery("SELECT id FROM timed_times WHERE id = " .. playerGuid)
+    if not playerTimestamps[playerGuid] then
+        playerTimestamps[playerGuid] = {
+            Daily = 0,
+            Weekly = 0,
+        }
 
-    if not existingEntry then
-        -- When the player has no DB entry it will be created
-        WorldDBExecute("INSERT INTO timed_times (id, Daily, Weekly) VALUES (" .. playerGuid .. ", 0, 0)")
+        -- Load player timestamps from the database on login
+        local query = WorldDBQuery("SELECT id, daily, weekly FROM timed_times WHERE id = " .. playerGuid)
+        if not query then
+            -- If there is no entry in the database, create a new one
+            WorldDBExecute("INSERT INTO timed_times (id, daily, weekly) VALUES (" .. playerGuid .. ", 0, 0)")
+        else
+            local row = query:GetRow()
+            if row then
+                playerTimestamps[playerGuid].Daily = tonumber(row["daily"]) or 0
+                playerTimestamps[playerGuid].Weekly = tonumber(row["weekly"]) or 0
+            end
+        end
     end
-    
-    -- Choose the right time stamp for the given reward type
-    local defaultTimestamp = os.time()
-    WorldDBExecute("UPDATE timed_times SET " .. rewardType .. " = " .. defaultTimestamp .. " WHERE id = " .. playerGuid)
 end
 
-
+-- Function to save execution time in memory and update the database
 local function SaveExecutionTime(player, timestamp, rewardType)
-    --Get the player guid
     local playerGuid = player:GetGUIDLow()
+    playerTimestamps[playerGuid][rewardType] = timestamp
 
-    --Check if the player has a DB entry
-    local existingEntry = WorldDBQuery("SELECT id FROM timed_times WHERE id = " .. playerGuid)
-
-    if existingEntry then
-        --When the player has an entry, update the time stamp based on the reward type
-        local queryStr = "UPDATE timed_times SET " .. rewardType .. " = " .. timestamp .. " WHERE id = " .. playerGuid
-        WorldDBExecute(queryStr)
-    else
-        --When the player has no entry, insert with the time stamp for the specific reward type
-        local queryStr = "INSERT INTO timed_times (id, " .. rewardType .. ") VALUES (" .. playerGuid .. ", " .. timestamp .. ")"
-        WorldDBExecute(queryStr)
-    end
+    -- Update the database with the new timestamp
+    local queryStr = string.format("UPDATE timed_times SET %s = %d WHERE id = %d", rewardType, timestamp, playerGuid)
+    WorldDBExecute(queryStr)
 end
 
---Function to call the last timestamp from the DB
+-- Function to get the last execution time from memory
 local function GetLastExecutionTime(player, rewardType)
-    --Get the player GUID
     local playerGuid = player:GetGUIDLow()
+    return playerTimestamps[playerGuid][rewardType] or 0
+end
 
-    --Get the timestamp from the database
-    local query = WorldDBQuery("SELECT " .. rewardType .. " FROM timed_times WHERE id = " .. playerGuid)
+-- Function to give daily/weekly rewards to the player via mail
+local function HandleRewardsViaMail(player, rewardType)
+    -- Check if there are rewards defined for the given rewardType
+    if rewardData[rewardType] and #rewardData[rewardType] > 0 then
+        -- Iterate through the rewards and send them to the player via mail
+        for _, reward in ipairs(rewardData[rewardType]) do
+            for i = 1, 4 do
+                local item = reward["item" .. i]
+                local amount = reward["amount" .. i]
 
-    if query then
-        local row = query:GetRow()
-        return row and tonumber(row[rewardType]) or 0
-    else
-        return 0
+                -- Check if the item and amount are valid
+                if item and amount and item ~= 0 and amount ~= 0 then
+                    local itemGUIDLow = SendMail("Reward", "Congratulations! You have received a reward.", player:GetGUIDLow(), 0, 61, 0, 0, 0, item, amount)
+                end
+            end
+        end
     end
 end
 
-
-local function DailyRewards(player)
-
-    --Check the timed_rewards for the Daily item rewards line
-    local query = WorldDBQuery("SELECT Item, Amount, Item1, Amount1, Item2, Amount2, Item3, Amount3 FROM timed_rewards WHERE Type = 'daily'")
-    local playerGuid = player:GetGUIDLow()
-    if query then
-        repeat
-            local DailyItem = query:GetUInt32(0)
-            local DailyAmount = query:GetUInt32(1)
-            local DailyItem1 = query:GetUInt32(2)
-            local DailyAmount1 = query:GetUInt32(3)
-            local DailyItem2 = query:GetUInt32(4)
-            local DailyAmount2 = query:GetUInt32(5)
-            local DailyItem3 = query:GetUInt32(6)
-            local DailyAmount3 = query:GetUInt32(7)
-
-            --Adding the items to the player
-            SendMail("Daily Reward", "Thank you for your daily login and have fun claiming your reward :)", playerGuid, 1, 61, 0, 0, 0, DailyItem, DailyAmount, DailyItem1, DailyAmount1, DailyItem2, DailyAmount2, DailyItem3, DailyAmount3)
-        until not query:Next()
-    end
-end
-
-local function WeeklyRewards(player)
-
-    --Check the timed_rewards for the Weekly item rewards line
-    local query = WorldDBQuery("SELECT Item, Amount, Item1, Amount1, Item2, Amount2, Item3, Amount3 FROM timed_rewards WHERE Type = 'Weekly'")
-    local playerGuid = player:GetGUIDLow()
-    if query then
-        repeat
-            local WeeklyItem = query:GetUInt32(0)
-            local WeeklyAmount = query:GetUInt32(1)
-            local WeeklyItem1 = query:GetUInt32(2)
-            local WeeklyAmount1 = query:GetUInt32(3)
-            local WeeklyItem2 = query:GetUInt32(4)
-            local WeeklyAmount2 = query:GetUInt32(5)
-            local WeeklyItem3 = query:GetUInt32(6)
-            local WeeklyAmount3 = query:GetUInt32(7)
-
-            --Adding the weekly items
-            SendMail("Daily Reward", "Thank you for your daily login and have fun claiming your reward :)", playerGuid, 1, 61, 0, 0, 0, WeeklyItem, WeeklyAmount, WeeklyItem1, WeeklyAmount1, WeeklyItem2, WeeklyAmount2, WeeklyItem3, WeeklyAmount3)
-
-        until not query:Next()
-    end
-end
-
---Function for the daily rewards (24 Hours Timer)
+-- Function to handle daily rewards using memory instead of DB queries
 function MyHandlers.Daily(player, ...)
-    CheckAndCreateTimedTimesEntry(player, "Daily")
+    CheckAndCreatePlayerEntry(player)
 
     local currentTimestamp = os.time()
     local lastExecutionTime = GetLastExecutionTime(player, "Daily")
 
-    -- Checking if when the last time was when the player got his reward
     if (currentTimestamp - lastExecutionTime) >= (24 * 60 * 60) then
         SaveExecutionTime(player, currentTimestamp, "Daily")
+        HandleRewardsViaMail(player, "Daily")
         player:SendBroadcastMessage("You have been awarded your daily items via Mail! :)")
-        DailyRewards(player)
     else
         local remainingTime = (24 * 60 * 60) - (currentTimestamp - lastExecutionTime)
         local remainingHours = math.floor(remainingTime / 3600)
         local remainingMinutes = math.floor((remainingTime % 3600) / 60)
         local remainingSeconds = remainingTime % 60
-        local remainingTimeString = string.format("%d hours, %d minutes und %d seconds", remainingHours, remainingMinutes, remainingSeconds)
+        local remainingTimeString = string.format("%d hours, %d minutes, and %d seconds", remainingHours, remainingMinutes, remainingSeconds)
 
-        -- Sending the remaining time to the player
         SendWorldMessage("You still need to wait " .. remainingTimeString .. " before claiming this reward again.", player)
     end
 end
 
--- Function for the weekly reward (7 days timer)
+-- Function to handle weekly rewards using memory instead of DB queries
 function MyHandlers.Weekly(player, ...)
-    CheckAndCreateTimedTimesEntry(player, "Weekly")
+    CheckAndCreatePlayerEntry(player)
 
     local currentTimestamp = os.time()
     local lastExecutionTime = GetLastExecutionTime(player, "Weekly")
 
-    -- Checking if when the last time was when the player got his reward
     if (currentTimestamp - lastExecutionTime) >= (7 * 24 * 60 * 60) then
         SaveExecutionTime(player, currentTimestamp, "Weekly")
+        HandleRewardsViaMail(player, "Weekly")
         player:SendBroadcastMessage("You have been awarded your weekly items via Mail! :)")
-        WeeklyRewards(player)
     else
         local remainingTime = (7 * 24 * 60 * 60) - (currentTimestamp - lastExecutionTime)
         local remainingDays = math.floor(remainingTime / (24 * 60 * 60))
         local remainingHours = math.floor((remainingTime % (24 * 60 * 60)) / 3600)
         local remainingMinutes = math.floor((remainingTime % 3600) / 60)
         local remainingSeconds = remainingTime % 60
-        local remainingTimeString = string.format("%d days, %d hours, %d minutes und %d seconds", remainingDays, remainingHours, remainingMinutes, remainingSeconds)
+        local remainingTimeString = string.format("%d days, %d hours, %d minutes, and %d seconds", remainingDays, remainingHours, remainingMinutes, remainingSeconds)
 
-        -- Sending the remaining time to the player
         SendWorldMessage("You still need to wait " .. remainingTimeString .. " before claiming this reward again.", player)
     end
 end
 
---Command to call the AIO menu
-
 local function OnCommand(event, player, command)
     if command == "rewards" or command == "rw" then
-            AIO.Handle(player, "Rewards", "RewardFrame")
-            return false
-        end
+        AIO.Handle(player, "Rewards", "RewardFrame")
+        return false
     end
+end
 
-RegisterPlayerEvent(42, OnCommand)
+RegisterPlayerEvent(42, OnCommand)  -- Use the correct event for player login (Event: PLAYER_LOGIN)
