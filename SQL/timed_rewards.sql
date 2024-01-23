@@ -7,14 +7,14 @@ SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS `timed_rewards`;
 CREATE TABLE `timed_rewards`  (
   `Type` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  `Item` int NOT NULL,
-  `Amount` int NOT NULL,
   `Item1` int NOT NULL,
   `Amount1` int NOT NULL,
   `Item2` int NOT NULL,
   `Amount2` int NOT NULL,
   `Item3` int NOT NULL,
   `Amount3` int NOT NULL,
+  `Item4` int NOT NULL,
+  `Amount4` int NOT NULL,
   PRIMARY KEY (`Type` DESC) USING BTREE
 ) ENGINE = InnoDB AUTO_INCREMENT = 14 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci ROW_FORMAT = Dynamic;
 
